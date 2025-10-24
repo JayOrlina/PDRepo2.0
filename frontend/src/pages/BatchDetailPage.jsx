@@ -37,8 +37,9 @@ const StatusBadge = ({ status }) => {
 };
 
 const LowSupplyAlert = ({ status }) => {
+
     if (status !== 'Paused') {
-        return null; // Only show alert if the batch is actively Paused
+        return null; 
     }
 
     return (
@@ -54,7 +55,7 @@ const LowSupplyAlert = ({ status }) => {
     );
 };
 
-// --- SupplyStatus component (reads from machineState) ---
+// --- SupplyStatus component ---
 const SupplyStatus = ({ label, level }) => {
     const isLow = level === 0;
     const statusText = isLow ? 'Low' : 'Sufficient';
@@ -93,6 +94,7 @@ const BatchDetailPage = () => {
                 }
             } catch (error) {
                 console.error("Error fetching data", error);
+                // Don't toast on polling errors, it's annoying
             } finally {
                 setLoading(false);
             }
@@ -119,6 +121,7 @@ const BatchDetailPage = () => {
             navigate("/");
         } catch (error) {
             console.error("Error deleting the Batch", error);
+            // Show the specific error from the backend
             toast.error(error.response?.data?.message || "Failed to delete the Batch");
         }
     }
@@ -145,7 +148,7 @@ const BatchDetailPage = () => {
         }
     };
 
-    if (loading || !machineState) {
+    if (loading || !machineState) { 
         return (
             <div className="min-h-screen bg-base-200 flex items-center justify-center">
                 <LoaderIcon className="animate-spin size-10 text-primary" />
@@ -278,3 +281,4 @@ const BatchDetailPage = () => {
 };
 
 export default BatchDetailPage;
+

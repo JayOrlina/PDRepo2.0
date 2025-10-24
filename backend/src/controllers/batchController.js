@@ -2,10 +2,9 @@ import Batch from '../models/Batch.js';
 import MachineState from '../models/machineState.js';
 import axios from 'axios';
 
-const HARDWARE_IP = "http://10.126.124.91"; // (Your ESP32's IP)
+const HARDWARE_IP = "http://192.168.1.50"; // (Your ESP's IP)
 
 // --- HELPER FUNCTION ---
-// This finds the one-and-only machine state document, or creates it if it doesn't exist.
 async function getOrCreateMachineState() {
     let state = await MachineState.findOne({ systemName: 'main' });
     if (!state) {
@@ -15,8 +14,6 @@ async function getOrCreateMachineState() {
     return state;
 }
 
-// --- NEW CONTROLLER ---
-// A new endpoint for the frontend to get the global state
 export async function getMachineState(req, res) {
     try {
         const state = await getOrCreateMachineState();
@@ -27,15 +24,102 @@ export async function getMachineState(req, res) {
     }
 }
 
-// --- UPDATED CONTROLLER ---
+// This handles dedicated updates for Soil and Cup levels
+export async function updateMachineState(req, res) {
+    try {
+        const { soilLevel, cupLevel } = req.body;
+        const machineState = await getOrCreateMachineState();
+
+        // Update the MachineState document
+        if (soilLevel !== undefined) machineState.soilLevel = soilLevel;
+        if (cupLevel !== undefined) machineState.cupLevel = cupLevel;
+        await machineState.save();
+
+        // Check if a batch is active and needs to be paused or resumed
+        if (machineState.activeBatchId) {
+            const activeBatch = await Batch.findById(machineState.activeBatchId);
+            if (activeBatch && activeBatch.status !== 'Finished' && activeBatch.status !== 'Cancelled') {
+                
+                // If supplies are low, PAUSE the active batch
+                if (machineState.soilLevel === 0 || machineState.cupLevel === 0) {
+                    if (activeBatch.status !== 'Paused') {
+                        activeBatch.status = 'Paused';
+                        await activeBatch.save();
+                    }
+                } 
+                // If supplies are good AND the batch was paused, RESUME it
+                else if (activeBatch.status === 'Paused') {
+                    activeBatch.status = 'Ongoing';
+                    await activeBatch.save();
+                }
+            }
+        }
+        
+        res.status(200).json(machineState);
+
+    } catch (error) {
+        console.error("Error in updateMachineState", error);
+        res.status(500).json({ message: "Error updating machine state" });
+    }
+}
+
+
+// This now only handles pot increments
+export async function updateBatch(req, res) {
+    try {
+        const { potsIncrement } = req.body;
+        
+        // This function should only be called if a pot is incremented
+        if (!potsIncrement) {
+            return res.status(400).json({ message: "No pot increment provided" });
+        }
+
+        const batch = await Batch.findById(req.params.id);
+        const machineState = await getOrCreateMachineState();
+
+        if (!batch) {
+            return res.status(404).json({ message: "Batch not found" });
+        }
+        if (batch.status === 'Finished' || batch.status === 'Cancelled') {
+            return res.status(400).json({ message: "This batch is already complete." });
+        }
+
+        batch.potsDoneCount += Number(potsIncrement);
+
+        // Check for completion
+        if (batch.potsDoneCount >= batch.outputCount) {
+            batch.status = 'Finished';
+            batch.potsDoneCount = batch.outputCount; // Cap the count
+            machineState.activeBatchId = null; 
+        } else {
+            // Batch is not finished. Check if supplies are low.
+            if (machineState.soilLevel === 0 || machineState.cupLevel === 0) {
+                batch.status = 'Paused';
+            } else {
+                batch.status = 'Ongoing';
+            }
+        }
+        
+        // Save both models
+        await machineState.save();
+        const updatedBatch = await batch.save();
+        
+        res.status(200).json(updatedBatch);
+
+    } catch (error) {
+        console.error("Error in updateBatch controller", error);
+        res.status(500).json({ message: "Error updating batch" });
+    }
+}
+
 export async function createBatch(req, res) {
     try {
         const { title, content, seedType, outputCount } = req.body;
         
-        // 1. Get the current machine state
+        // Get the current machine state
         const machineState = await getOrCreateMachineState();
 
-        // 2. Check for blockers
+        // Check for blockers
         if (machineState.activeBatchId) {
             return res.status(400).json({ message: "A batch is already in progress." });
         }
@@ -43,11 +127,11 @@ export async function createBatch(req, res) {
             return res.status(400).json({ message: "Cannot start: Supplies are low." });
         }
 
-        // 3. Create the batch
+        // Create the batch
         const batch = new Batch({ title, content, seedType, outputCount });
         const savedBatch = await batch.save();
 
-        // 4. Tell the hardware to start
+        // Tell the hardware to start
         try {
             await axios.post(`${HARDWARE_IP}/start-batch`, {
                 batchId: savedBatch._id
@@ -58,7 +142,7 @@ export async function createBatch(req, res) {
             // We'll continue even if hardware fails, the batch is created.
         }
 
-        // 5. Update the machine state to show this batch is active
+        // Update the machine state to show this batch is active
         machineState.activeBatchId = savedBatch._id;
         await machineState.save();
         
@@ -67,55 +151,6 @@ export async function createBatch(req, res) {
     } catch (error) {
         console.error("Error in createBatch controller", error);
         res.status(500).json({ message: "Error creating batch" });
-    }
-}
-
-// This function now updates TWO models
-export async function updateBatch(req, res) {
-    try {
-        const { potsIncrement, soilLevel, cupLevel } = req.body;
-        
-        // 1. Get both the batch and the machine state
-        const batch = await Batch.findById(req.params.id);
-        const machineState = await getOrCreateMachineState();
-
-        if (!batch) {
-            return res.status(404).json({ message: "Batch not found" });
-        }
-
-        if (batch.status === 'Finished' || batch.status === 'Cancelled') {
-            return res.status(400).json({ message: "This batch is already complete." });
-        }
-
-        // 2. Update the correct model based on sensor data
-        if (soilLevel !== undefined) machineState.soilLevel = soilLevel;
-        if (cupLevel !== undefined) machineState.cupLevel = cupLevel;
-        if (potsIncrement) batch.potsDoneCount += Number(potsIncrement);
-
-        // 3. Run the new logic
-        if (machineState.soilLevel === 0 || machineState.cupLevel === 0) {
-            batch.status = 'Paused';
-        } else {
-            // Supplies are good, check if finished
-            if (batch.potsDoneCount >= batch.outputCount) {
-                batch.status = 'Finished';
-                batch.potsDoneCount = batch.outputCount; // Cap the count
-                machineState.activeBatchId = null; // <-- Machine is now free
-            } else {
-                // Supplies are good and not finished
-                batch.status = 'Ongoing';
-            }
-        }
-        
-        // 4. Save both models
-        await machineState.save();
-        const updatedBatch = await batch.save();
-        
-        res.status(200).json(updatedBatch);
-
-    } catch (error) {
-        console.error("Error in updateBatch controller", error);
-        res.status(500).json({ message: "Error updating batch" });
     }
 }
 

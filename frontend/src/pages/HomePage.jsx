@@ -1,13 +1,13 @@
 import Navbar from "../components/Navbar";
-import { useState, useEffect, useMemo, useRef } from "react"; 
+import { useState, useEffect, useMemo, useRef } from "react"; // <-- Import useRef
 import RateLimitedUI from "../components/RateLimitedUI";
 import { toast } from "react-hot-toast";
 import BatchCard from "../components/BatchCard";
 import api from "../lib/axios";
 import NotFound from "../components/NotFound";
-import { LoaderIcon } from "lucide-react"; 
+import { LoaderIcon } from "lucide-react"; // <-- Import loader
 
-// --- SupplyStatus Component ---
+// --- This component is needed for the dashboard ---
 const SupplyStatus = ({ label, level }) => {
     const isLow = level === 0; // 0 = Low, 1 = Sufficient
     const statusText = isLow ? 'Low' : 'Sufficient';
@@ -26,12 +26,12 @@ function HomePage() {
   const [isRateLimited, setIsRateLimited] = useState(false);
   const [batches, setBatches] = useState([]); 
   const [machineState, setMachineState] = useState(null); 
-  const [loadingBatches, setLoadingBatches] = useState(true); 
-  const [loadingState, setLoadingState] = useState(true); 
+  const [loadingBatches, setLoadingBatches] = useState(true); // <-- Split loading state
+  const [loadingState, setLoadingState] = useState(true); // <-- Split loading state
   
-  const pollingRef = useRef(null); 
+  const pollingRef = useRef(null); // <-- Add ref for polling
 
-  // -- Fetch Batch History ---
+  // --- Effect 1: Fetch Batch History (ONCE) ---
   useEffect(() => {
     const fetchBatchHistory = async () => {
       setLoadingBatches(true);
@@ -52,22 +52,23 @@ function HomePage() {
     };
 
     fetchBatchHistory();
-  }, []); 
+  }, []); // Empty array, runs only once on mount
 
-  // --- Fetch Machine State + Set up Polling ---
+  // --- Effect 2: Fetch Machine State + Set up Polling ---
   useEffect(() => {
     const fetchMachineState = async () => {
       try {
-        const stateRes = await api.get("/batch/machine-state");
+        const stateRes = await api.get("/batch/machine-state"); // <-- New API call
         setMachineState(stateRes.data);
       } catch (error) {
         console.error("Error polling machine state:", error);
+        // We don't show a toast on polling errors, it gets annoying
       } finally {
         setLoadingState(false);
       }
     };
 
-    fetchMachineState(); 
+    fetchMachineState(); // Run once immediately
     
     // Set up the polling interval
     pollingRef.current = setInterval(fetchMachineState, 3000); // Polls every 3 seconds
@@ -78,15 +79,15 @@ function HomePage() {
         clearInterval(pollingRef.current);
       }
     };
-  }, []); 
+  }, []); // Empty array, runs once to set up polling
 
-  // --- Memos ---
+  // --- Memos (now update in real-time) ---
   const isBatchActive = useMemo(() => {
     return machineState?.activeBatchId != null;
   }, [machineState]);
 
   const areSuppliesLow = useMemo(() => {
-    if (!machineState) return true; 
+    if (!machineState) return true; // Default to 'low' (disabled) while loading
     return machineState.soilLevel === 0 || machineState.cupLevel === 0;
   }, [machineState]);
 
@@ -101,8 +102,10 @@ function HomePage() {
 
       <div className="max-w-7xl mx-auto p-4 mt-6">
         
+        {/* --- ADDED: Machine State Dashboard --- */}
         <div className="mb-6">
             <h2 className="text-2xl font-bold mb-4">Machine Status</h2>
+            {/* --- This section now updates every 3 seconds --- */}
             {loadingState ? (
                 <div className="text-center"><LoaderIcon className="animate-spin size-6" /></div>
             ) : machineState ? (
@@ -117,6 +120,7 @@ function HomePage() {
         
         <h2 className="text-2xl font-bold mb-4">Batch History</h2>
 
+        {/* --- This section only loads once --- */}
         {loadingBatches && (
           <div className="text-center py-10"><LoaderIcon className="animate-spin size-6" /></div>
         )}
@@ -136,3 +140,4 @@ function HomePage() {
 }
 
 export default HomePage;
+

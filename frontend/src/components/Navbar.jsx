@@ -1,11 +1,11 @@
-import { Link } from "react-router";
+import { Link } from "react-router"; // <-- Make sure this is 'react-router-dom'
 import { PlusIcon } from "lucide-react";
 import toast from "react-hot-toast";
 
-// 1. Accept 'isBatchActive' and 'areSuppliesLow'
+// Accept 'isBatchActive' and 'areSuppliesLow'
 const Navbar = ({ isBatchActive, areSuppliesLow }) => {
 
-  // 2. Combine logic
+  // Combine logic
   const isDisabled = isBatchActive || areSuppliesLow;
   let tooltipMessage = "Create a new batch";
 
@@ -31,11 +31,11 @@ const Navbar = ({ isBatchActive, areSuppliesLow }) => {
             
             <div
               className="tooltip tooltip-bottom"
-              data-tip={tooltipMessage}
+              data-tip={tooltipMessage} 
             >
               <Link
                 to={"/create"}
-                className={`btn btn-primary ${isDisabled ? "btn-disabled" : ""}`} 
+                className={`btn btn-primary ${isDisabled ? "btn-disabled" : ""}`}
                 onClick={handleNewBatchClick}
               >
                 <PlusIcon className="size-5" />
