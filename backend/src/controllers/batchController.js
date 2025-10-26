@@ -114,12 +114,10 @@ export async function updateBatch(req, res) {
 
 export async function createBatch(req, res) {
     try {
-        const { title, content, seedType, outputCount } = req.body;
+        const { title, seedType, outputCount } = req.body;
         
-        // Get the current machine state
         const machineState = await getOrCreateMachineState();
 
-        // Check for blockers
         if (machineState.activeBatchId) {
             return res.status(400).json({ message: "A batch is already in progress." });
         }
@@ -127,11 +125,9 @@ export async function createBatch(req, res) {
             return res.status(400).json({ message: "Cannot start: Supplies are low." });
         }
 
-        // Create the batch
-        const batch = new Batch({ title, content, seedType, outputCount });
+        const batch = new Batch({ title, seedType, outputCount });
         const savedBatch = await batch.save();
 
-        // Tell the hardware to start
         try {
             await axios.post(`${HARDWARE_IP}/start-batch`, {
                 batchId: savedBatch._id
@@ -139,10 +135,8 @@ export async function createBatch(req, res) {
             console.log(`Successfully sent start command to hardware for batch: ${savedBatch._id}`);
         } catch (hwError) {
             console.error("CRITICAL: Failed to contact hardware.", hwError.message);
-            // We'll continue even if hardware fails, the batch is created.
         }
 
-        // Update the machine state to show this batch is active
         machineState.activeBatchId = savedBatch._id;
         await machineState.save();
         

@@ -5,10 +5,6 @@ const batchSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  content: {
-    type: String,
-    required: true
-  },
   seedType: {
     type: Number,
     required: true

@@ -36,8 +36,8 @@ const StatusBadge = ({ status }) => {
     );
 };
 
+// --- LowSupplyAlert now just reads the batch status ---
 const LowSupplyAlert = ({ status }) => {
-
     if (status !== 'Paused') {
         return null; 
     }
@@ -55,7 +55,7 @@ const LowSupplyAlert = ({ status }) => {
     );
 };
 
-// --- SupplyStatus component ---
+// --- SupplyStatus component (reads from machineState) ---
 const SupplyStatus = ({ label, level }) => {
     const isLow = level === 0;
     const statusText = isLow ? 'Low' : 'Sufficient';
@@ -94,7 +94,6 @@ const BatchDetailPage = () => {
                 }
             } catch (error) {
                 console.error("Error fetching data", error);
-                // Don't toast on polling errors, it's annoying
             } finally {
                 setLoading(false);
             }
@@ -121,7 +120,6 @@ const BatchDetailPage = () => {
             navigate("/");
         } catch (error) {
             console.error("Error deleting the Batch", error);
-            // Show the specific error from the backend
             toast.error(error.response?.data?.message || "Failed to delete the Batch");
         }
     }
@@ -135,7 +133,6 @@ const BatchDetailPage = () => {
         try {
             await api.put(`/batch/${id}/cancel`); 
             toast.success("Batch cancelled successfully");
-            // Polling will update the UI
         } catch (error) {
             console.error("Error cancelling the Batch", error);
             toast.error("Failed to cancel the Batch");
@@ -230,15 +227,13 @@ const BatchDetailPage = () => {
                            <SupplyStatus label="Potting Cup Supply Level" level={machineState.cupLevel} />
                         </div>
                         
-                        <div className="mt-8">
-                            <h3 className="font-semibold text-md mb-2">Description / Notes</h3>
-                            <p className="text-gray-600 bg-base-200 p-4 rounded-lg text-sm">{batch.content}</p>
-                        </div>
+                        
                     </div>
                 </div>
             </div>
         </div>
 
+        {/* --- Delete Modal  --- */}
         <dialog id="delete_modal" className="modal">
             <div className="modal-box">
                 <h3 className="font-bold text-lg">Confirm Deletion</h3>
@@ -255,6 +250,7 @@ const BatchDetailPage = () => {
             </form>
         </dialog>
         
+        {/* --- Cancel Modal --- */}
         <dialog id="cancel_modal" className="modal">
             <div className="modal-box">
                 <h3 className="font-bold text-lg">Confirm Cancellation</h3>
@@ -281,4 +277,3 @@ const BatchDetailPage = () => {
 };
 
 export default BatchDetailPage;
-

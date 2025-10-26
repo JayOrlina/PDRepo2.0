@@ -6,7 +6,6 @@ import api from "../lib/axios";
 
 const CreatePage = () => {
   const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
   const [seedType, setSeedType] = useState(""); 
   const [outputCount, setOutputCount] = useState(""); 
   const [loading, setLoading] = useState(false);
@@ -15,7 +14,7 @@ const CreatePage = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!title.trim() || !content.trim() || !seedType || !outputCount || parseInt(outputCount, 10) <= 0) {
+    if (!title.trim() || !seedType || !outputCount || parseInt(outputCount, 10) <= 0) {
       toast.error("All fields are required and output count must be a positive number.", {
         duration: 3000,
       });
@@ -23,37 +22,26 @@ const CreatePage = () => {
     }
     setLoading(true);
     try {
-      // 1. Capture the response from the server
       const response = await api.post("/batch", {
         title,
-        content,
         seedType: parseInt(seedType, 10),
         outputCount: parseInt(outputCount, 10),
       });
 
-      // 2. Get the new batch data (which includes the _id)
       const newBatch = response.data;
-      
       toast.success("Batch created! Starting...");
-
-      // 3. Navigate to the new batch's detail page
       navigate(`/batch/${newBatch._id}`);
 
     } catch (error) {
       console.log("Error", error);
       
-      // Specific error for hardware failure
-      if (error.response && error.response.data && error.response.data.message === "Batch created, but hardware not contacted") {
-        toast.error("Batch created, but failed to start hardware. Check hardware connection.");
-        // We can still navigate to the page even if hardware failed to start
-        navigate(`/batch/${error.response.data.batch._id}`);
-
-      } else if (error.response && error.response.status === 429) {
+      if (error.response && error.response.status === 429) {
         toast.error("Slow down! You're submitting too fast", {
           duration: 3000,
         });
       } else {
-        toast.error("Failed to create batch");
+        // Check for specific backend errors
+        toast.error(error.response?.data?.message || "Failed to create batch");
       }
     } finally {
       setLoading(false);
@@ -83,17 +71,6 @@ const CreatePage = () => {
                   />
                 </div>
 
-                <div className='form-control mb-4'>
-                  <label className='label'>
-                    <span className='label-text'>Content</span>
-                  </label>
-                  <textarea
-                    placeholder='Write your Content Here'
-                    className='textarea textarea-bordered h-32'
-                    value={content}
-                    onChange={(e) => setContent(e.target.value)}
-                  />
-                </div>
 
                 <div className='form-control mb-4'>
                   <label className='label'>
