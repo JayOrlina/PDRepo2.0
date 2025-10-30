@@ -1,0 +1,7 @@
+.env file
+
+MONGO_URI=mongodb+srv://orlinajeremyjohn_db_user:d0LNFTH7fl5qpz3p@cluster0.evr2l4o.mongodb.net/batch_db?retryWrites=true&w=majority&appName=Cluster0
+PORT=5001
+
+UPSTASH_REDIS_REST_URL="https://allowed-chicken-17069.upstash.io"
+UPSTASH_REDIS_REST_TOKEN="AUKtAAIncDIwNTY0ZjQ1YWE0OGI0MDFkYjRhMDNlMGE2YThkYTAxYnAyMTcwNjk"
