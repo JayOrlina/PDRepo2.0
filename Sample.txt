@@ -5,3 +5,365 @@ PORT=5001
 
 UPSTASH_REDIS_REST_URL="https://allowed-chicken-17069.upstash.io"
 UPSTASH_REDIS_REST_TOKEN="AUKtAAIncDIwNTY0ZjQ1YWE0OGI0MDFkYjRhMDNlMGE2YThkYTAxYnAyMTcwNjk"
+
+
+
+server
+
+import express from 'express';
+import dotenv from 'dotenv';
+import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { SerialPort } from 'serialport';
+import { ReadlineParser } from '@serialport/parser-readline';
+import axios from 'axios'; // Used for internal API calls
+
+import batchesRoutes from './routes/batchesRoutes.js';
+import { connectDb } from './config/db.js';
+
+dotenv.config();
+
+// --- ES Module equivalent of __dirname ---
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+const PORT = process.env.PORT || 5001;
+const API_URL = `http://localhost:${PORT}/api/batch`;
+
+// --- Hardware Port Setup ---
+// Use /dev/ttyACM0 for Arduino Mega/Uno on Raspberry Pi
+// (NodeMCU is usually /dev/ttyUSB0)
+const port = new SerialPort({
+  path: '/dev/ttyACM0', 
+  baudRate: 115200,
+  autoOpen: false,
+});
+
+// Create a parser to read data line by line
+const parser = port.pipe(new ReadlineParser({ delimiter: '\n' }));
+
+// --- Make the port globally available to controllers ---
+app.set('serialport', port);
+
+// --- Middleware ---
+app.use(cors({
+  origin: 'http://localhost:5173', // Your dev frontend origin
+}));
+app.use(express.json());
+
+// --- Serve Static React Build (for Kiosk Mode) ---
+app.use(express.static(path.join(__dirname, '../../frontend/build')));
+
+// --- API Routes ---
+app.use("/api/batch", batchesRoutes);
+
+// --- React Catch-all ---
+// This serves index.html for any request that isn't an API call
+app.get('*', (req, res) => {
+  res.sendFile(path.resolve(__dirname, '../../frontend/build', 'index.html'));
+});
+
+// --- Helper function to handle messages from Mega ---
+function handleHardwareMessage(data) {
+  if (data.startsWith('SOIL_LEVEL:')) {
+    const level = parseInt(data.split(':')[1], 10);
+    // Make internal API call to update global state
+    axios.put(`${API_URL}/machine-state-update`, { soilLevel: level })
+      .catch(e => console.error("[Hardware] Error updating soil:", e.message));
+  
+  } else if (data.startsWith('CUP_LEVEL:')) {
+    const level = parseInt(data.split(':')[1], 10);
+    axios.put(`${API_URL}/machine-state-update`, { cupLevel: level })
+      .catch(e => console.error("[Hardware] Error updating cup:", e.message));
+  
+  } else if (data.startsWith('POT_INCREMENT:')) {
+    // The Mega doesn't know the active batch ID, but the server does.
+    // 1. Get the current machine state
+    axios.get(`${API_URL}/machine-state`)
+      .then(res => {
+        const activeBatchId = res.data.activeBatchId;
+        if (activeBatchId) {
+          // 2. If an ID exists, send the pot increment to that batch's endpoint
+          axios.put(`${API_URL}/${activeBatchId}`, { potsIncrement: 1 })
+            .catch(e => console.error("[Hardware] Error incrementing pot:", e.message));
+        }
+      })
+      .catch(e => console.error("[Hardware] Error getting state:", e.message));
+  } else if (data.startsWith('HARDWARE_READY')) {
+    console.log('[Hardware] Arduino Mega has booted and is ready.');
+  }
+}
+
+// --- Connect DB, Start Server, Open Port ---
+connectDb().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+    
+    // Now that server is running, open the serial port
+    port.open((err) => {
+      if (err) {
+        console.error(`[Hardware] Error opening port: ${err.message}. Is Mega plugged in?`);
+      } else {
+        console.log('[Hardware] Serial port open and listening.');
+      }
+    });
+
+    // Listen for data from the Mega
+    parser.on('data', handleHardwareMessage);
+  });
+});
+
+export default app;
+
+
+BatchController
+import Batch from '../models/Batch.js';
+import MachineState from '../models/machineState.js';
+
+// --- HELPER FUNCTION ---
+// Finds the one-and-only machine state document, or creates it.
+async function getOrCreateMachineState() {
+    let state = await MachineState.findOne({ systemName: 'main' });
+    if (!state) {
+        state = new MachineState();
+        await state.save();
+    }
+    return state;
+}
+
+// --- Controller for React App (Frontend) ---
+export async function getMachineState(req, res) {
+    try {
+        const state = await getOrCreateMachineState();
+        res.status(200).json(state);
+    } catch (error) {
+        console.error("Error in getMachineState", error);
+        res.status(500).json({ message: "Error fetching machine state" });
+    }
+}
+
+// --- Controller for Hardware (Internal) ---
+// Triggered by axios call in server.js when Mega sends "SOIL_LEVEL:0"
+export async function updateMachineState(req, res) {
+    try {
+        const { soilLevel, cupLevel } = req.body;
+        const machineState = await getOrCreateMachineState();
+
+        // 1. Update the MachineState document
+        if (soilLevel !== undefined) machineState.soilLevel = soilLevel;
+        if (cupLevel !== undefined) machineState.cupLevel = cupLevel;
+        await machineState.save();
+
+        // 2. Check if a batch is active and needs to be paused or resumed
+        if (machineState.activeBatchId) {
+            const activeBatch = await Batch.findById(machineState.activeBatchId);
+            if (activeBatch && activeBatch.status !== 'Finished' && activeBatch.status !== 'Cancelled') {
+                
+                // If supplies are low, PAUSE the active batch
+                if (machineState.soilLevel === 0 || machineState.cupLevel === 0) {
+                    if (activeBatch.status !== 'Paused') {
+                        activeBatch.status = 'Paused';
+                        await activeBatch.save();
+                    }
+                } 
+                // If supplies are good AND the batch was paused, RESUME it
+                else if (activeBatch.status === 'Paused') {
+                    activeBatch.status = 'Ongoing';
+                    await activeBatch.save();
+                }
+            }
+        }
+        
+        res.status(200).json(machineState);
+
+    } catch (error) {
+        console.error("Error in updateMachineState", error);
+        res.status(500).json({ message: "Error updating machine state" });
+    }
+}
+
+// --- Controller for React App (Frontend) ---
+export async function createBatch(req, res) {
+    try {
+        const { title, seedType, outputCount } = req.body;
+        const machineState = await getOrCreateMachineState();
+
+        // Check for blockers
+        if (machineState.activeBatchId) {
+            return res.status(400).json({ message: "A batch is already in progress." });
+        }
+        if (machineState.soilLevel === 0 || machineState.cupLevel === 0) {
+            return res.status(400).json({ message: "Cannot start: Supplies are low." });
+        }
+
+        const batch = new Batch({ title, seedType, outputCount });
+        const savedBatch = await batch.save();
+
+        // --- HARDWARE CALL (NOW USES SERIAL) ---
+        try {
+            // Get the port object we stored in app
+            const port = req.app.get('serialport'); 
+            if (port && port.isOpen) {
+              // Send the START command with the ID to the Mega
+              port.write(`START:${savedBatch._id}\n`); 
+              console.log(`Successfully sent START command for batch: ${savedBatch._id}`);
+            } else {
+              console.error("CRITICAL: Serial port not open. Could not start batch.");
+              // You could decide to "pause" the batch here as a safety measure
+            }
+        } catch (hwError) {
+            console.error("CRITICAL: Failed to send hardware command.", hwError.message);
+        }
+        // --- END OF CHANGE ---
+
+        machineState.activeBatchId = savedBatch._id;
+        await machineState.save();
+        
+        res.status(201).json(savedBatch);
+
+    } catch (error) {
+        console.error("Error in createBatch controller", error);
+        res.status(500).json({ message: "Error creating batch" });
+    }
+}
+
+// --- Controller for Hardware (Internal) ---
+// Triggered by axios call in server.js when Mega sends "POT_INCREMENT:1"
+export async function updateBatch(req, res) {
+    try {
+        const { potsIncrement } = req.body;
+        
+        // This function should only be called if a pot is incremented
+        if (!potsIncrement) {
+            return res.status(400).json({ message: "No pot increment provided" });
+        }
+
+        const batch = await Batch.findById(req.params.id);
+        const machineState = await getOrCreateMachineState();
+
+        if (!batch) {
+            return res.status(404).json({ message: "Batch not found" });
+        }
+        if (batch.status === 'Finished' || batch.status === 'Cancelled') {
+            return res.status(400).json({ message: "This batch is already complete." });
+        }
+
+        // 1. Update pot count
+        batch.potsDoneCount += Number(potsIncrement);
+
+        // 2. Check for completion
+        if (batch.potsDoneCount >= batch.outputCount) {
+            batch.status = 'Finished';
+            batch.potsDoneCount = batch.outputCount; // Cap the count
+            machineState.activeBatchId = null; // <-- Machine is now free
+        } else {
+            // Batch is not finished. Check if supplies are low.
+            // This is a good safety check in case the state is slightly out of sync
+            if (machineState.soilLevel === 0 || machineState.cupLevel === 0) {
+                batch.status = 'Paused';
+            } else {
+                batch.status = 'Ongoing';
+            }
+        }
+        
+        // 3. Save both models
+        await machineState.save();
+        const updatedBatch = await batch.save();
+        
+        res.status(200).json(updatedBatch);
+
+    } catch (error) {
+        console.error("Error in updateBatch controller", error);
+        res.status(500).json({ message: "Error updating batch" });
+    }
+}
+
+// --- Controller for React App (Frontend) ---
+export async function cancelBatch(req, res) {
+    try {
+        const batch = await Batch.findById(req.params.id);
+        const machineState = await getOrCreateMachineState();
+
+        if (!batch) {
+            return res.status(404).json({ message: "Batch not found" });
+        }
+
+        if (batch.status !== 'Ongoing' && batch.status !== 'Paused') {
+            return res.status(400).json({ message: `Batch cannot be cancelled, status is: ${batch.status}` });
+        }
+
+        // --- HARDWARE CALL (NOW USES SERIAL) ---
+        try {
+            const port = req.app.get('serialport'); // Get port from app
+            if (port && port.isOpen) {
+              port.write(`STOP\n`); // Send the STOP command to the Mega
+              console.log(`Successfully sent STOP command for batch: ${batch._id}`);
+            } else {
+              console.error("CRITICAL: Serial port not open. Could not stop batch.");
+            }
+        } catch (hwError) {
+            console.error("CRITICAL: Failed to send hardware stop command.", hwError.message);
+        }
+        // --- END OF CHANGE ---
+        
+        batch.status = 'Cancelled';
+        const updatedBatch = await batch.save(); // Use updatedBatch to send back
+
+        machineState.activeBatchId = null; // <-- Machine is now free
+        await machineState.save();
+
+        res.status(200).json(updatedBatch);
+
+    } catch (error) {
+        console.error("Error in cancelBatch controller", error);
+        res.status(500).json({ message: "Error cancelling batch" });
+    }
+}
+
+// --- Controller for React App (Frontend) ---
+export async function deleteBatch(req, res) {
+    try {
+        const machineState = await getOrCreateMachineState();
+        
+        // Check if the batch to be deleted is the currently active one
+        if (machineState.activeBatchId && machineState.activeBatchId.toString() === req.params.id) {
+            return res.status(400).json({ message: "Cannot delete an active batch. Please cancel it first." });
+        }
+
+        const deletedBatch = await Batch.findByIdAndDelete(req.params.id);
+        if (!deletedBatch) {
+            return res.status(404).json({ message: "Batch not found" });
+        }
+        res.status(200).json({ message: "Batch Deleted Successfully" });
+    } catch (error) {
+        console.error("Error in deleteBatch controller", error);
+        res.status(500).json({ message: "Error deleting batch" });
+    }
+}
+
+// --- Controller for React App (Frontend) ---
+export async function getAllBatch(_, res) {
+    try {
+        const batch = await Batch.find().sort({ createdAt: -1 });
+        res.status(200).json(batch);
+    } catch (error) {
+        console.error("Error in getAllBatch controller",error);
+        res.status(500).json({ message: "Error fetching batch" });
+    }
+}
+
+// --- Controller for React App (Frontend) ---
+export async function getBatchById(req, res) {
+    try {
+        const batch = await Batch.findById(req.params.id);
+        if (!batch) {
+            return res.status(404).json({ message: "Batch not found" });
+        }
+        res.status(200).json(batch);
+    } catch (error) {
+        console.error("Error in getBatchById controller", error);
+        res.status(500).json({ message: "Error fetching batch" });
+    }
+}
