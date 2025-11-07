@@ -367,3 +367,120 @@ export async function getBatchById(req, res) {
         res.status(500).json({ message: "Error fetching batch" });
     }
 }
+
+ARDUINO
+
+// --- Pin Definitions (for Mega) ---
+#define POT_COUNTER_PIN 2  // IR Sensor 1
+#define SOIL_LEVEL_PIN  3  // IR Sensor 2
+#define CUP_LEVEL_PIN   4  // IR Sensor 3
+
+// (Add your motor/servo pins here)
+// #define CUP_SERVO_PIN 9
+// #define SOIL_MOTOR_PIN 10
+
+// --- Global State ---
+String currentBatchId = ""; // Stores the ID from the Pi
+bool batchIsActive = false;
+
+// State-tracking for sensors (using raw values)
+int lastSoilState = HIGH;
+int lastCupState = HIGH;
+int lastPotState = HIGH;
+
+void setup() {
+  // This is the main USB serial port for talking to the Raspberry Pi
+  Serial.begin(115200); 
+  
+  // Setup your sensor pins
+  pinMode(POT_COUNTER_PIN, INPUT);
+  pinMode(SOIL_LEVEL_PIN, INPUT);
+  pinMode(CUP_LEVEL_PIN, INPUT);
+  
+  // (Setup your motor pins, servos, steppers here)
+  // myServo.attach(CUP_SERVO_PIN);
+
+  Serial.println("HARDWARE_READY"); // Tell the Pi we've booted
+}
+
+void loop() {
+  // Job 1: Check for commands from Raspberry Pi
+  checkPiCommands();
+
+  // Job 2: Check global sensors (ALWAYS runs)
+  checkGlobalSensors();
+
+  // Job 3: Check batch sensors (ONLY if batch is active)
+  if (batchIsActive) {
+    checkBatchSensors();
+    
+    // --- YOUR MOTOR LOGIC WOULD GO HERE ---
+    // e.g., runMotorSequence(); 
+    // --------------------------------------
+  }
+  
+  delay(50);
+}
+
+// Check for commands (like "START:id" or "STOP") from the Pi
+void checkPiCommands() {
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+
+    if (command.startsWith("START:")) {
+      // Command looks like "START:68fc1e73..."
+      currentBatchId = command.substring(6); // Get the ID part
+      batchIsActive = true;
+      Serial.println("ACK: Batch armed: " + currentBatchId);
+    } 
+    else if (command == "STOP") {
+      currentBatchId = ""; // Disarm
+      batchIsActive = false;
+      // stopAllMotors(); // <-- Call your motor stop function
+      Serial.println("ACK: Batch stopped.");
+    }
+  }
+}
+
+// --- Sensor Functions (with Inverted Logic) ---
+
+void checkGlobalSensors() {
+  // --- Check Soil Sensor ---
+  int rawSoilValue = digitalRead(SOIL_LEVEL_PIN); // 0 = Blocked (Sufficient), 1 = Empty (Low)
+  int logicalSoilValue = (rawSoilValue == LOW) ? 1 : 0; 
+  
+  if (logicalSoilValue != lastSoilState) {
+    // Send the logical value to the Pi
+    Serial.println("SOIL_LEVEL:" + String(logicalSoilValue)); 
+    lastSoilState = logicalSoilValue;
+  }
+  
+  // --- Check Cup Sensor ---
+  int rawCupValue = digitalRead(CUP_LEVEL_PIN); // 0 = Blocked (Sufficient), 1 = Empty (Low)
+  int logicalCupValue = (rawCupValue == LOW) ? 1 : 0; 
+
+  if (logicalCupValue != lastCupState) {
+    Serial.println("CUP_LEVEL:" + String(logicalCupValue));
+    lastCupState = logicalCupValue;
+  }
+}
+
+void checkBatchSensors() {
+  // --- Check Pot Counter ---
+  int rawPotValue = digitalRead(POT_COUNTER_PIN); // 0 = Blocked, 1 = Empty
+
+  // We check for a "falling edge" (1 -> 0)
+  // This is the moment the pot *arrives*
+  if (rawPotValue == LOW && lastPotState == HIGH) {
+    Serial.println("POT_INCREMENT:1"); // Send increment message
+  }
+  lastPotState = rawPotValue; // Store the new *raw* state
+}
+
+/*
+void stopAllMotors() {
+  Serial.println("STOPPING ALL MOTORS");
+  // (Your code to stop all servos, steppers, etc.)
+}
+*/
